@@ -23,15 +23,20 @@ input=$(cat)
 cmd=$(jget tool_input.command "$input")
 cwd=$(jget cwd "$input")
 
-case "$cmd" in
+# 归一化 git -C <路径>，必须在下面那道守卫**之前**做。
+# 守卫匹配的是字面量 "git commit"，而 `git -C /repo commit …` 里不含这个子串——
+# 先守卫就等于把 -C 分支写成死代码，命令照常放行。这个顺序问题是自测里那条
+# -C 用例抓出来的（check-merge.sh 同款），光看代码看不出来。
+if printf '%s' "$cmd" | grep -qE 'git[[:space:]]+-C[[:space:]]'; then
+  cwd=$(printf '%s' "$cmd" | sed -nE 's/.*git[[:space:]]+-C[[:space:]]+("[^"]+"|[^[:space:]]+).*/\1/p' | head -1 | tr -d '"')
+fi
+cmdx=$(printf '%s' "$cmd" | sed -E 's/git[[:space:]]+-C[[:space:]]+("[^"]+"|[^[:space:]]+)/git/')
+
+case "$cmdx" in
   *"git commit"*) ;;
   *) exit 0 ;;
 esac
 
-# 支持 git -C <path> commit
-if printf '%s' "$cmd" | grep -qE 'git[[:space:]]+-C[[:space:]]'; then
-  cwd=$(printf '%s' "$cmd" | sed -nE 's/.*git[[:space:]]+-C[[:space:]]+("[^"]+"|[^[:space:]]+).*/\1/p' | head -1 | tr -d '"')
-fi
 [ -n "$cwd" ] && cd "$cwd" 2>/dev/null || exit 0
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 
@@ -41,13 +46,13 @@ printf '%s\n' "$staged" | grep -qE '^code/' || exit 0
 
 # 提取提交信息：heredoc > -m 参数 > 整条命令
 msg=""
-if printf '%s' "$cmd" | grep -q '<<'; then
-  msg=$(printf '%s' "$cmd" | sed -n '/<</,$p')
+if printf '%s' "$cmdx" | grep -q '<<'; then
+  msg=$(printf '%s' "$cmdx" | sed -n '/<</,$p')
 fi
 if [ -z "$msg" ]; then
-  msg=$(printf '%s' "$cmd" | grep -oE '\-m[[:space:]]+.*' || true)
+  msg=$(printf '%s' "$cmdx" | grep -oE '\-m[[:space:]]+.*' || true)
 fi
-[ -z "$msg" ] && msg="$cmd"
+[ -z "$msg" ] && msg="$cmdx"
 
 id=$(printf '%s' "$msg" | grep -oE 'task-[0-9]{4}' | head -1)
 

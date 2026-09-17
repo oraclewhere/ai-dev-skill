@@ -10,6 +10,15 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# 本套件要能在两种布局下跑：源码仓库（bin/install.sh）与已安装的 skill（assets/install.sh）。
+# 理由和 install.sh 自带一份是同一个：改完 hook 之后，人会想在**用得着的那个位置**验证，
+# 而不是 cd 回源码仓库。布局探测漏了的话，装完后跑它就是一句"安装失败"，没人会去查为什么。
+if   [ -f "$ROOT/bin/install.sh" ];    then INSTALL="$ROOT/bin/install.sh"
+elif [ -f "$ROOT/assets/install.sh" ]; then INSTALL="$ROOT/assets/install.sh"
+else printf '错误：找不到 install.sh（bin/ 与 assets/ 下都没有），安装包不完整。\n' >&2; exit 1
+fi
+
 WORK="$(mktemp -d)"
 PASS=0
 FAIL=0
@@ -40,7 +49,7 @@ assert_no() {
 }
 
 printf '\n=== 准备测试项目 ===\n'
-bash "$ROOT/bin/install.sh" project "$WORK" >/dev/null 2>&1 || { echo "安装失败"; exit 1; }
+bash "$INSTALL" project "$WORK" >/dev/null 2>&1 || { echo "安装失败"; exit 1; }
 cd "$WORK" || exit 1
 git init -q . && git config user.email t@t && git config user.name t
 
@@ -112,6 +121,21 @@ assert_silent "引用了存在的任务 ID → 放行"
 H check-commit.sh "$J_NOTCOMMIT"
 assert_silent "非 commit 命令 → 不干预"
 
+# git -C <路径>：cwd 字段不可信，脚本必须自己解析 -C。同上，cwd 指向非仓库目录，
+# 没解析 -C 的话它会 cd 过去、rev-parse 失败、静默放行。
+NONREPO_C="$(mktemp -d)"
+J_C_DENY="{\"tool_input\":{\"command\":\"git -C $WORK commit -m \\\"fix bug\\\"\"},\"cwd\":\"$NONREPO_C\",\"session_id\":\"s1\"}"
+J_C_OK="{\"tool_input\":{\"command\":\"git -C $WORK commit -m \\\"task-0001: 登录接口\\\"\"},\"cwd\":\"$NONREPO_C\",\"session_id\":\"s1\"}"
+
+echo "x4" >> code/src/a.js
+git add code/src/a.js >/dev/null 2>&1
+H check-commit.sh "$J_C_DENY"
+assert_deny "git -C <路径> commit 且没引用任务 ID → 仍然拦截"
+
+H check-commit.sh "$J_C_OK"
+assert_silent "git -C <路径> commit 引用了任务 ID → 放行"
+rm -rf "$NONREPO_C"
+
 # heredoc 形式的提交（Claude Code 实际最常用这种写法）
 J_HEREDOC="{\"tool_input\":{\"command\":\"git commit -F - <<'EOF'\\ntask-0001: 登录接口\\nEOF\"},\"cwd\":\"$WORK\",\"session_id\":\"s1\"}"
 H check-commit.sh "$J_HEREDOC"
@@ -164,6 +188,21 @@ assert_silent "merge message 引用了交付件（通路 A）→ 放行"
 H check-merge.sh "$J_M_OK"
 assert_silent "被合入提交的任务有交付件（通路 B）→ 放行"
 
+# git -C <路径> merge：命令自己带了仓库路径，所以 cwd 字段是不可信的。
+# 这里刻意把 cwd 指到一个**不是仓库**的目录：如果脚本没解析 -C，它会 cd 过去、
+# rev-parse 失败、静默 exit 0——两条用例会双双"通过"，而通路 B 永远不生效。
+# 这正是要用一个假 cwd 来验的原因，不能只测 cwd 正确的情况。
+NONREPO="$(mktemp -d)"
+J_M_C="{\"tool_input\":{\"command\":\"git -C $WORK merge feature/nodeliv --no-edit\"},\"cwd\":\"$NONREPO\",\"session_id\":\"s1\"}"
+J_M_C_OK="{\"tool_input\":{\"command\":\"git -C $WORK merge feature/x --no-edit\"},\"cwd\":\"$NONREPO\",\"session_id\":\"s1\"}"
+
+H check-merge.sh "$J_M_C"
+assert_deny "git -C <路径> merge 且没有交付件 → 仍然拦截"
+
+H check-merge.sh "$J_M_C_OK"
+assert_silent "git -C <路径> merge 时通路 B 仍然生效"
+rm -rf "$NONREPO"
+
 git checkout -q feature/x
 H check-merge.sh "$J_M_DENY"
 assert_silent "非发布分支 → 不干预"
@@ -173,7 +212,7 @@ printf '\n=== 回归：全新仓库（unborn HEAD）===\n'
 # 曾经的 bug：git rev-parse --abbrev-ref HEAD 在无提交的仓库里返回字面量 "HEAD"，
 # 被当成非发布分支，合并校验被静默跳过 —— 规则在纸上存在、在运行时不存在。
 U="$(mktemp -d)"
-bash "$ROOT/bin/install.sh" project "$U" >/dev/null 2>&1
+bash "$INSTALL" project "$U" >/dev/null 2>&1
 ( cd "$U" && git init -q . )
 OUT=$(printf '{"tool_input":{"command":"git merge x"},"cwd":"%s","session_id":"s"}' "$U" \
       | "$U/.claude/hooks/check-merge.sh" 2>/dev/null)
@@ -245,13 +284,34 @@ else
   bad "压缩前状态已落盘" "快照文件缺失或内容不对"
 fi
 
+printf '\n=== 安装产物：索引由模板渲染 ===\n'
+# 模板里的占位符没被替换掉的话，发到项目里的是个半成品；而 {{...}} 这种东西
+# 在编辑器里不显眼，很容易就这么进版本库。所以断言两件事：文件在、占位符没了。
+for d in 决策约束 交付件 任务记录 error; do
+  idx="$WORK/doc/$d/索引.md"
+  if [ ! -f "$idx" ]; then
+    bad "doc/$d/索引.md 由模板生成" "文件不存在"
+  elif grep -q '{{' "$idx"; then
+    bad "doc/$d/索引.md 占位符已替换" "仍含 {{...}}：$(grep -m1 '{{' "$idx")"
+  else
+    ok "doc/$d/索引.md 由模板生成且占位符已替换"
+  fi
+done
+
 printf '\n=== 依赖缺失时的行为 ===\n'
-OUT=$(printf '{}' | PATH=/usr/bin:/bin AIDF_FORCE_NO_TOOL=1 "$WORK/.claude/hooks/check-commit.sh" 2>&1)
-# 这条只验证脚本在无 json 工具时会明确报警而不是静默通过（见 _lib.sh aidf_deps）
-if printf '%s' "$OUT" | grep -q "ai-dev-flow" || [ -z "$OUT" ]; then
-  ok "依赖缺失路径有明确出口（不静默假装校验过）"
+# 用 _lib.sh 的 AIDF_TEST_NO_TOOL 接缝，而不是收窄 PATH。
+# 曾经写的是 PATH=/usr/bin:/bin，但本机 python3 在 /usr/bin 下还有一份，
+# 校验照常跑完、没有任何输出，断言却靠着 `|| [ -z "$OUT" ]` 这个兜底通过了——
+# 它一直在测空气，而那个兜底恰好就是它声称要防的"静默通过"。
+OUT=$(printf '{}' | AIDF_TEST_NO_TOOL=1 "$WORK/.claude/hooks/check-commit.sh" 2>&1); CODE=$?
+if [ "$CODE" != "0" ]; then
+  bad "依赖缺失时以 exit 0 退出（而非阻断会话）" "实际 exit=$CODE"
+elif ! printf '%s' "$OUT" | grep -q "本次校验跳过"; then
+  bad "依赖缺失时明确报警" "期望警告文本，实际：${OUT:-<空——正是它声称要防的静默通过>}"
+elif ! printf '%s' "$OUT" | grep -q "规则暂时没有生效"; then
+  bad "报警说明了规则此刻未生效" "实际：${OUT:0:200}"
 else
-  bad "依赖缺失路径有明确出口" "实际：${OUT:0:160}"
+  ok "依赖缺失时明确报警、且说明规则此刻未生效"
 fi
 
 printf '\n=== 结果 ===\n'

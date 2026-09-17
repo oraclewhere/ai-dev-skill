@@ -23,7 +23,16 @@ input=$(cat)
 cmd=$(jget tool_input.command "$input")
 cwd=$(jget cwd "$input")
 
-case "$cmd" in
+# 归一化 git -C <路径>，必须在下面那道守卫**之前**做。
+# 守卫匹配的是字面量 "git merge"，而 `git -C /repo merge x` 里不含这个子串——
+# 先守卫就等于把 -C 分支写成死代码。这个顺序问题是自测里那条 -C 用例抓出来的：
+# 它在第一次运行时就红了，而代码读起来完全正常。
+if printf '%s' "$cmd" | grep -qE 'git[[:space:]]+-C[[:space:]]'; then
+  cwd=$(printf '%s' "$cmd" | sed -nE 's/.*git[[:space:]]+-C[[:space:]]+("[^"]+"|[^[:space:]]+).*/\1/p' | head -1 | tr -d '"')
+fi
+cmdx=$(printf '%s' "$cmd" | sed -E 's/git[[:space:]]+-C[[:space:]]+("[^"]+"|[^[:space:]]+)/git/')
+
+case "$cmdx" in
   *"git merge"*) ;;
   *) exit 0 ;;
 esac
@@ -35,12 +44,12 @@ branch=$(current_branch)
 is_release_branch "$branch" || exit 0
 
 # 通路 A：message 直接引用 doc 文件
-if printf '%s' "$cmd" | grep -qE 'doc/(决策约束|交付件)/'; then
+if printf '%s' "$cmdx" | grep -qE 'doc/(决策约束|交付件)/'; then
   exit 0
 fi
 
 # 提取被合入的分支/引用（跳过选项参数）
-src=$(printf '%s' "$cmd" | sed -nE 's/.*git[[:space:]]+merge[[:space:]]+((-[^[:space:]]+[[:space:]]+)*)([^[:space:]]+).*/\3/p' | head -1)
+src=$(printf '%s' "$cmdx" | sed -nE 's/.*git[[:space:]]+merge[[:space:]]+((-[^[:space:]]+[[:space:]]+)*)([^[:space:]]+).*/\3/p' | head -1)
 src=${src%%[\;\&\|]*}
 
 # 通路 B：被合入的提交引用的任务有交付件

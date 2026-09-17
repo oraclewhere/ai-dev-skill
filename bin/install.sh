@@ -80,7 +80,9 @@ install_skill() {
   place "$PROJ_SRC/CLAUDE.md.template" "$dst/assets/project/CLAUDE.md.template"
   # 自带安装脚本，这样 skill 目录是自包含的——否则 /ai-dev-flow 初始化 在装完之后用不了
   place "$ROOT/bin/install.sh" "$dst/assets/install.sh"
-  chmod +x "$dst/assets/install.sh" "$dst/assets/project/hooks/"*.sh 2>/dev/null
+  # 自测套件也一起走：改了 hook 之后要在**装完的位置**跑得动，否则没人会去源码仓库里跑它
+  place "$ROOT/bin/selftest.sh" "$dst/assets/selftest.sh"
+  chmod +x "$dst/assets/install.sh" "$dst/assets/selftest.sh" "$dst/assets/project/hooks/"*.sh 2>/dev/null
 
   say ""
   say "完成。新开一个 session 后即可使用 /ai-dev-flow。"
@@ -100,15 +102,31 @@ install_project() {
   mkdir -p code scripts doc/决策约束 doc/交付件 doc/任务记录 doc/error .claude/hooks .claude/.state
   say "  目录：code/ scripts/ doc/{决策约束,交付件,任务记录,error}/ .claude/{hooks,.state}/"
 
-  for d in 决策约束 交付件 任务记录; do
-    local idx="doc/$d/索引.md"
-    if [ -e "$idx" ] && [ "$FORCE" -eq 0 ]; then skip "$idx"; continue; fi
-    { printf '# %s 索引\n\n' "$d"
-      printf '> 本文件由 /ai-dev-flow 维护。新接入的 session 读这里了解现状，不要逐个文件翻。\n\n'
-      printf '| ID | 标题 | 状态 | 更新日期 | 备注 |\n|---|---|---|---|---|\n| | | | | |\n'
-    } > "$idx"
+  # 索引由 assets/templates/索引.md 渲染，不再内联拼字符串。
+  # 原因：模板里的「状态说明」是内联版没有的，两边各自漂移的话，发出去的模板就是个
+  # 没人用的摆设——而模板才是单一事实来源。
+  write_index() {
+    local dir="$1" role="$2" states="$3" idx="doc/$1/索引.md"
+    if [ -e "$idx" ] && [ "$FORCE" -eq 0 ]; then skip "$idx"; return 0; fi
+    sed -e "s|{{目录名}}|$dir|" \
+        -e "s|{{作用}}|$role|" \
+        -e "s|{{状态说明}}|$states|" \
+        "$TPL_SRC/索引.md" > "$idx"
     printf '  写入：%s\n' "$idx"
-  done
+  }
+
+  write_index 决策约束 \
+    '人维护、AI 只读。当前生效的技术栈、需求拆分结果与限制条件。' \
+    '- `draft` 草稿，等人批准 / `active` 生效中 / `superseded` 已被取代'
+  write_index 交付件 \
+    'AI 生成、人审阅。接口契约、实现结果、验证方法。' \
+    '- `current` 当前有效 / `stale` 上游决策变更后待重验'
+  write_index 任务记录 \
+    'commit 的关联锚点，兼对话记录。工作量单位是"能否在一个 session 内闭环"。' \
+    '- `todo` 未开始 / `doing` 进行中 / `review` 待验收 / `done` 已验收'
+  write_index error \
+    '复盘产出的违规报告，用于迭代方法论。每条归因到「执行违规」（→ 加 hook）或「规则歧义」（→ 改措辞）。' \
+    '- `pass` 本次未发现违规 / `fail` 存在违规条目，详见报告正文'
 
   for f in "$TPL_SRC"/*.md; do
     local b; b="$(basename "$f")"

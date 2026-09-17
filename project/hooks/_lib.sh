@@ -11,6 +11,16 @@
 AIDF_PY="$(command -v python3 || command -v python || true)"
 AIDF_JQ="$(command -v jq || true)"
 
+# 测试接缝：强制模拟"两个工具都没有"的环境。
+# 为什么需要它：本机 python3 同时存在于 /root/anaconda3/bin 和 /usr/bin，
+# 靠收窄 PATH 造不出"工具缺失"——那条用例会静默地什么都没测到，
+# 而"校验看起来有效果"恰恰是本套件存在的理由。所以开一个显式的、只影响依赖探测的
+# 接缝，而不是让测试去碰环境。变量名以 AIDF_TEST_ 开头，表明它只服务于测试。
+if [ "${AIDF_TEST_NO_TOOL:-}" = "1" ]; then
+  AIDF_PY=""
+  AIDF_JQ=""
+fi
+
 aidf_deps() {
   if [ -z "$AIDF_PY" ] && [ -z "$AIDF_JQ" ]; then
     printf 'ai-dev-flow: 需要 python3 或 jq 之一来解析 hook 输入，两者都没找到。\n' >&2

@@ -1,0 +1,5 @@
+# hook 的运行时状态（会话标记、压缩前快照），不进版本库
+.claude/.state/
+
+# 含机器绝对路径（状态栏命令），且是 Claude Code 的 local 变体，约定不提交
+.claude/settings.local.json

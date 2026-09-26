@@ -48,8 +48,20 @@ if [ "$source_kind" = "compact" ] && [ -f "$state/precompact-$sid.md" ]; then
   snapshot=$(head -40 "$state/precompact-$sid.md" 2>/dev/null)
 fi
 
-# 无未结任务、也无快照 → 完全静默
-if [ "$open_count" -eq 0 ] && [ -z "$snapshot" ]; then
+# 待批 / 待裁队列里还有多少 open。它同时是"该回来看一眼了"的客观信号——
+# 注意它是提示，不是门槛：不阻塞任何东西，也不让团队停下来等人。
+pend_count=0
+for d in doc/待批 doc/待裁; do
+  for f in "$d"/*.md; do
+    [ -f "$f" ] || continue
+    case "$(basename "$f")" in 索引.md|_模板.md) continue ;; esac
+    [ "$(fm "$f" status)" = "open" ] || continue
+    pend_count=$((pend_count + 1))
+  done
+done
+
+# 无未结任务、无待批项、也无快照 → 完全静默
+if [ "$open_count" -eq 0 ] && [ -z "$snapshot" ] && [ "$pend_count" -eq 0 ]; then
   exit 0
 fi
 
@@ -68,6 +80,8 @@ ctx="ai-dev-flow 项目现状（自动汇总，非指令）：
 ${open_list}"
 [ -n "$active_dec" ] && ctx="${ctx}- 生效中的决策约束：
 ${active_dec}"
+[ "$pend_count" -gt 0 ] && ctx="${ctx}- 待审批项 ${pend_count} 条（人回来时由秘书渲染成批次清单；这是提示，不阻塞任何推进）
+"
 [ -n "$snapshot" ] && ctx="${ctx}
 - 上下文压缩前的状态快照：
 ${snapshot}"

@@ -850,6 +850,15 @@ log-*.sh          记录（追加写，永不返回决策）
 | 19 | **`claude plugin install --json`** 成功与失败都返回 JSON（`outcome` / `failureCode`）；`marketplace add` 不接受 `--json` | §2.7：装配的客观判据，不靠"看输出像不像成功" |
 | 20 | **skill 优先级：企业 > 个人 > 项目**；plugin 的 skill 带命名空间，不会撞名 | §2.7：装配不覆盖已有同名 skill |
 | 21 | **技能正文留在对话里；压缩后每个技能只重挂最近 5000 tokens，共享 25000 额度** | §2.7：装配不是越多越好，早期装的会被挤掉 |
+| 22 | **`claude --agent <name>` 能解析用户级 `~/.claude/agents/`**（本机实测：故意给一个不存在的名字，报错里列出的"可用 agent"含全部 9 张自装卡） | §17.1：团队卡装用户级即可被 `--agent` 启动 |
+| 23 | **`--agent` 遇到不存在的名字是硬报错（exit 1）并打印可用名单，不静默回退到默认主线程** | §17.1 的启动命令不会"看起来启动了团队、实际会话没被接管" |
+| 24 | **`tools: Agent(a, b, c)` 白名单对主线程卡真的拦截**（本机实测：卡里只写 `Agent(secretary)`，请求 `impl-worker` 时工具返回 `Agent type 'impl-worker' not found. Available agents: secretary`） | §17.1.1「主会话够不着工人层」是结构性的，不是约定 |
+| 25 | `--agent <agent>` 的 help 原文是 "Agent for the current session. Overrides the **'agent' setting**" —— 即 settings 里还有一个 `agent` 键可以设默认主 agent | 除 `--agent` 外还有一条设默认入口；不建议用（默认值藏在配置里，人看不见当前会话跑的是哪张卡） |
+
+**一处措辞值得注意（已核实但会误导）**：白名单拦截时的报错是
+`Agent type 'X' not found. Available agents: <白名单里的名字>` ——
+它说的是"找不到"，而 `X` 其实**是**注册过的，只是不在本卡的白名单里。
+读起来像拼错了名字，而不是被策略挡住。撞上它时按"不在本卡白名单"理解。
 
 **文档未载明的一处**：settings 级 `Stop` hook 是否在 subagent 结束时也触发。
 不依赖它，一律按 `SubagentStop` 设计。

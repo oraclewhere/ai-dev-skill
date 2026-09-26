@@ -122,7 +122,7 @@
 ## 自测
 
 ```bash
-./bin/selftest.sh      # 32 项，覆盖五个 hook 的正常与边界路径
+./bin/selftest.sh      # 100 项，覆盖 hook 的正常与边界路径（含团队模式的角色边界、留痕、队列）
 ```
 
 **为什么这个套件是必需品而不是锦上添花**：这套东西的立论是"用机械校验替代模型自觉"。
@@ -143,7 +143,7 @@
 skill/                       → 安装到 ~/.claude/skills/ai-dev-flow/
   SKILL.md                   流程主体
   references/                合规检查清单（审计 subagent 读这个）
-  assets/templates/          五类文档模板
+  assets/templates/          文档模板（含索引渲染器、接口文档、技能装配清单）
 project/                     → 安装到 <项目>/.claude/
   CLAUDE.md.template         常驻不变量（员工手册）
   hooks/
@@ -154,11 +154,57 @@ project/                     → 安装到 <项目>/.claude/
     stop-handoff.sh          交接催办（每 session 一次）
     precompact-snapshot.sh   压缩前落盘
     statusline.sh            上下文仪表盘
+    check-branch.sh          分支粒度 = 任务粒度
+    check-queue.sh           队列项完整性 + 越权（只认 status: active 的授权）
+    check-role-boundaries.sh code/ 白名单 + draft→active 只有人能翻
+    check-irreversible.sh    不可逆动作 subagent 不许做
+    log-event.sh             记录型：拦截失效时也留痕
   settings.json              项目级配置（hook）
+team/                        → 安装到 ~/.claude/{agents,skills}/（用户级）
+  DESIGN.md                  团队模式的单一事实来源
+  agents/                    身份卡：六角色 + 两层工人
+    dev-team.md              团队声明卡（主会话身份，团队的总入口）
+    requirements-analyst.md  rule-manager.md   designer.md
+    develop-manager.md       test-manager.md   secretary.md
+    impl-worker.md           test-worker.md
+  skills/                    规则 skill（公共部分只存一份）
+    aidf-team              流程状态机        aidf-intake    尽调与离开声明
+    aidf-adjudicate        取证裁决与监护    aidf-queue     队列与裁定
+    aidf-design            设计产出          aidf-deliver   实现阶段
+    aidf-verify            验证阶段          aidf-equip     技能装配
 bin/
-  install.sh                 两处安装入口
+  install.sh                 三处安装入口（skill / team / project）
   selftest.sh                回归测试
 ```
 
 安装后的 skill 目录是**自包含**的：模板、hook、安装脚本都随 skill 一起走，
 所以 `/ai-dev-flow 初始化` 在只装了 skill 的机器上也能用。
+
+---
+
+## 团队模式：用一张卡启动一支团队
+
+```bash
+./bin/install.sh team              # 身份卡 + 规则 skill → ~/.claude/（用户级，无副作用）
+./bin/install.sh project <项目>     # 硬限制 → <项目>/.claude/（会拦你）
+claude --agent dev-team            # 用团队声明卡启动整个会话
+```
+
+启动后，这个会话就是整支团队：**需求分析师 / rule-manager / 设计师 / develop-manager /
+test-manager / 秘书**，后两者各自派生 `impl-*` 与 `test-*` 工人。
+
+**设计目标和取舍写在 [`team/DESIGN.md`](team/DESIGN.md)，那是单一事实来源。** 一句话版本：
+
+> 人的在场窗口是**尽调期**。控制权靠四个结构性控制点保住，不靠人在场：
+> **规则由人定 / 结果由人审 / 异常由人裁 / 合入由人触**。
+
+值得一提的两处硬结构（都不是"约定"，是做不到）：
+
+| 结构 | 效果 |
+|---|---|
+| `code/` 的写权限是**白名单**，凭据是 `agent_type` 以 `impl-` 开头 | `develop-manager` 不写代码不是因为它守纪律，而是因为它写不了 |
+| 团队声明卡的 `Agent(...)` 白名单里没有工人层 | 主会话**够不着** `impl-*` / `test-*`，派发只能经过各自的 manager |
+
+**技能装配**是启动流程的第 ⓪ 步：`aidf-*` 是**规则 skill**（这件事该怎么做），
+它们不能告诉一个 python worker 怎么写 python，所以还要装**能力 skill**。
+这一步由人经结构化选项决定，也可以选择什么都不装直接跑——那时团队会当面给出风险。
